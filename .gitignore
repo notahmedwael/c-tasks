@@ -1,0 +1,15 @@
+# Ignore compiled binaries and object files (for all tasks)
+*.exe
+*.o
+*.obj
+*.out
+*.log
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+
+# Ignore editor-specific folders
+.vscode/
+.idea/
+*.swp
