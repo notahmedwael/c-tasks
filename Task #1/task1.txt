@@ -1,0 +1,3 @@
+turn the external terminal into a grid of pixels, color the text too using words,
+pick a color of your choice. after a certain time clear the screen and view any other thing.
+make it compatible for windows and linux
