@@ -1,134 +1,158 @@
 #include "terminal_utils.h"
 #include <iostream>
+#include <string>
+#include <utility>
 
 #ifdef _WIN32
+// ------------------ WINDOWS VERSION ------------------
 #include <windows.h>
-#else
-#include <unistd.h>
-#include <termios.h>
-#endif
 
-using namespace std;
-
-#ifdef _WIN32
-DWORD originalMode;
-#else
-termios originalTermios;
-#endif
-
-void enableRawMode() {
-#ifdef _WIN32
-    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
-    GetConsoleMode(h, &originalMode);
-    DWORD mode = originalMode;
-    mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT);
-    SetConsoleMode(h, mode);
-#else
-    tcgetattr(STDIN_FILENO, &originalTermios);
-    termios raw = originalTermios;
-    raw.c_lflag &= ~(ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-#endif
-}
-
-void disableRawMode() {
-#ifdef _WIN32
-    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
-    SetConsoleMode(h, originalMode);
-#else
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalTermios);
-#endif
-}
-
-int readKey() {
-#ifdef _WIN32
-    INPUT_RECORD record;
-    DWORD count;
-    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
-    while (true) {
-        ReadConsoleInput(h, &record, 1, &count);
-        if (record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown) {
-            int key = record.Event.KeyEvent.wVirtualKeyCode;
-
-            switch(key) {
-                case VK_UP: return 1001;
-                case VK_DOWN: return 1002;
-                case VK_LEFT: return 1003;
-                case VK_RIGHT: return 1004;
-                case VK_HOME: return 1005;
-                case VK_END: return 1006;
-                case VK_RETURN: return 13;
-                case VK_BACK: return 8;
-            }
-        }
-    }
-#else
-    char c;
-    read(STDIN_FILENO, &c, 1);
-    if (c == 27) { // escape
-        char seq[2];
-        read(STDIN_FILENO, &seq[0], 1);
-        read(STDIN_FILENO, &seq[1], 1);
-
-        if (seq[0] == '[') {
-            if (seq[1] == 'A') return 1001; // Up
-            if (seq[1] == 'B') return 1002; // Down
-            if (seq[1] == 'C') return 1004; // Right
-            if (seq[1] == 'D') return 1003; // Left
-            if (seq[1] == 'H') return 1005; // Home
-            if (seq[1] == 'F') return 1006; // End
-        }
-    }
-    return c;
-#endif
+void clearScreen() {
+    system("cls");
 }
 
 void gotoXY(int x, int y) {
-#ifdef _WIN32
-    COORD pos = {(SHORT)x, (SHORT)y};
+    COORD pos = { (SHORT)x, (SHORT)y };
     SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), pos);
-#else
-    cout << "\033[" << y << ";" << x << "H";
-#endif
 }
 
-void setColor(const string& color) {
-#ifdef _WIN32
+void setColor(const std::string &color) {
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-    int code = 7;
 
-    if (color == "red") code = 12;
-    else if (color == "green") code = 10;
-    else if (color == "yellow") code = 14;
-    else if (color == "blue") code = 9;
-    else if (color == "cyan") code = 11;
-    else if (color == "magenta") code = 13;
-    else if (color == "white") code = 15;
-
-    SetConsoleTextAttribute(h, code);
-#else
-    string code = "37";
-
-    if (color == "red") code = "31";
-    else if (color == "green") code = "32";
-    else if (color == "yellow") code = "33";
-    else if (color == "blue") code = "34";
-    else if (color == "magenta") code = "35";
-    else if (color == "cyan") code = "36";
-    else if (color == "white") code = "97";
-
-    cout << "\033[" << code << "m";
-#endif
+    if (color == "red") SetConsoleTextAttribute(h, 12);
+    else if (color == "green") SetConsoleTextAttribute(h, 10);
+    else if (color == "yellow") SetConsoleTextAttribute(h, 14);
+    else if (color == "cyan") SetConsoleTextAttribute(h, 11);
+    else SetConsoleTextAttribute(h, 15);
 }
 
+void display(const std::string &text) {
+    std::cout << text;
+}
+
+std::pair<int,int> getTerminalSize() {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+    int cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    int rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    return {cols, rows};
+}
+
+int readKey() {
+    INPUT_RECORD record;
+    DWORD count;
+
+    while (true) {
+        ReadConsoleInput(GetStdHandle(STD_INPUT_HANDLE), &record, 1, &count);
+        if (record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown) {
+            auto key = record.Event.KeyEvent.wVirtualKeyCode;
+
+            if (key == VK_UP) return 1001;
+            if (key == VK_DOWN) return 1002;
+            if (key == VK_LEFT) return 1003;
+            if (key == VK_RIGHT) return 1004;
+            if (key == VK_HOME) return 1005;
+            if (key == VK_END) return 1006;
+
+            return record.Event.KeyEvent.uChar.AsciiChar;
+        }
+    }
+}
+
+void enableRawMode() {}
+void disableRawMode() {}
+
+#else
+// ------- LINUX VERSION -------
+#include <termios.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <cstdio>
+#include <iostream>
+
+static struct termios originalTermios;
+static bool rawModeEnabled = false;
+
+// ------------ Raw Mode ------------
+void enableRawMode() {
+    if (rawModeEnabled) return;
+
+    struct termios raw;
+    tcgetattr(STDIN_FILENO, &originalTermios);
+    raw = originalTermios;
+
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 0;   
+    raw.c_cc[VTIME] = 1;  
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    rawModeEnabled = true;
+}
+
+void disableRawMode() {
+    if (rawModeEnabled)
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalTermios);
+    rawModeEnabled = false;
+}
+
+// ------------ Terminal Size ------------
+std::pair<int,int> getTerminalSize() {
+    struct winsize w;
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+    return { w.ws_col, w.ws_row };
+}
+
+// ------------ Screen Functions ------------
 void clearScreen() {
-#ifdef _WIN32
-    system("cls");
-#else
-    cout << "\033[2J\033[H";
-#endif
+    write(STDOUT_FILENO, "\033[2J\033[H", 7);
 }
 
-void display(const string& text) {
-    cout << text;
+void gotoXY(int x, int y) {
+    printf("\033[%d;%dH", y, x);
 }
+
+void setColor(const std::string &color) {
+    if (color == "red")      printf("\033[31m");
+    else if (color == "green") printf("\033[32m");
+    else if (color == "yellow") printf("\033[33m");
+    else if (color == "cyan") printf("\033[36m");
+    else printf("\033[37m"); // white
+}
+
+void display(const std::string &text) {
+    std::cout << text;
+}
+
+// ------------ readKey() (FIXED) ------------
+int readKey() {
+    // Raw mode is already enabled in main(), don't call it again here
+    
+    unsigned char c;
+    int n = read(STDIN_FILENO, &c, 1);
+
+    if (n <= 0) return -1;
+
+    // ESC sequence
+    if (c == 27) {
+        unsigned char seq[2];
+
+        if (read(STDIN_FILENO, &seq[0], 1) <= 0) return 27;
+        if (read(STDIN_FILENO, &seq[1], 1) <= 0) return 27;
+
+        if (seq[0] == '[') {
+            switch (seq[1]) {
+                case 'A': return 1001; // UP
+                case 'B': return 1002; // DOWN
+                case 'D': return 1003; // LEFT
+                case 'C': return 1004; // RIGHT
+                case 'H': return 1005; // HOME
+                case 'F': return 1006; // END
+            }
+        }
+        return 27;
+    }
+
+    return c; // regular ASCII key (ENTER = 13)
+}
+
+#endif
