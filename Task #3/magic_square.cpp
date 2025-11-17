@@ -3,7 +3,7 @@
 
 // Use curses.h for both platforms (ncurses on Linux, pdcurses on Windows)
 #ifdef _WIN32
-    #include <curses.h>
+    #include <pdcurses.h>
 #else
     #include <ncurses.h>
 #endif

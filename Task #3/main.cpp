@@ -6,7 +6,7 @@
 // Cross-platform sleep
 #ifdef _WIN32
     #include <windows.h>
-    #include <curses.h>
+    #include <pdcurses.h>
     #define sleep_ms(ms) Sleep(ms)
 #else
     #include <unistd.h>
