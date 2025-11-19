@@ -1,7 +1,7 @@
 // main.cpp
 #include "magic_square.h"
-#include <vector>
 #include <cstdio>
+#include <vector>
 
 // Cross-platform sleep
 #ifdef _WIN32
@@ -22,44 +22,52 @@ int main() {
         return 1;
     }
 
-    std::vector<std::vector<int>> grid(n, std::vector<int>(n, 0));
-
     init_ncurses();
 
+    // For positioning on screen
+    int max_y, max_x;
+    getmaxyx(stdscr, max_y, max_x);
+
+    const int cell_width = 6;
+    int start_x = (max_x - n * cell_width) / 2;
+    int start_y = (max_y - n - 6) / 2;
+    if (start_y < 2) start_y = 2;
+
+    draw_title(n, start_y, max_x);    
+
+    // Track occupancy without storing values (just booleans)
+    std::vector<std::vector<bool>> used(n, std::vector<bool>(n, false));
+
+    // Initial position
     int row = 0;
     int col = (n - 1) / 2;
-    grid[row][col] = 1;
-    draw_grid(grid, n, 1);
-    sleep_ms(500);
 
-    for (int num = 2; num <= n * n; ++num) {
+    place_number(1, row, col, start_y, start_x, cell_width, true);
+    used[row][col] = true;
+    sleep_ms(400);
+
+    // Logic for next numbers
+    for (int num = 2; num <= n * n; num++) {
         int new_row = (row - 1 + n) % n;
         int new_col = (col + 1) % n;
 
-        if (grid[new_row][new_col] != 0) {
+        if (used[new_row][new_col]) {
+            // Move down from original
             new_row = (row + 1) % n;
             new_col = col;
         }
 
-        grid[new_row][new_col] = num;
         row = new_row;
         col = new_col;
+        used[row][col] = true;
 
-        draw_grid(grid, n, num);
-        sleep_ms(400);
+        place_number(num, row, col, start_y, start_x, cell_width, true);
+        sleep_ms(350);
     }
 
-    draw_grid(grid, n, n * n);
+    draw_complete_message(max_y, max_x);
 
-    attron(COLOR_PAIR(5) | A_BOLD | A_BLINK);
-    std::string done = "MAGIC SQUARE COMPLETE!";
-    mvprintw(LINES - 4, (COLS - (int)done.length()) / 2, "%s", done.c_str());
-    attroff(COLOR_PAIR(5) | A_BOLD | A_BLINK);
-
-    mvprintw(LINES - 2, 2, "Press any key to exit...");
-    refresh();
     getch();
-
     cleanup_ncurses();
     return 0;
 }
