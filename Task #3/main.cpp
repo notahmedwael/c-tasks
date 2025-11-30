@@ -33,7 +33,7 @@ int main() {
     int start_y = (max_y - n - 6) / 2;
     if (start_y < 2) start_y = 2;
 
-    draw_title(n, start_y, max_x);    
+    draw_title(n, start_y, max_x);
 
     // Track occupancy without storing values (just booleans)
     std::vector<std::vector<bool>> used(n, std::vector<bool>(n, false));
