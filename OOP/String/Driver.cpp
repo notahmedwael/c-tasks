@@ -1,6 +1,6 @@
 #include <iostream>
 #include "DynamicString.h"
-#include "driver.h"
+#include "Driver.h"
 
 void showMenu() {
     std::cout << "\n===== DynamicString Menu =====\n";
@@ -80,12 +80,26 @@ void runStringMenu() {
         }
 
         case 6: {
-            std::cout << "Lexicographical comparison:\n";
-            if (s < t) std::cout << "\"s\" comes BEFORE \"t\" alphabetically.\n";
-            else if (s > t) std::cout << "\"s\" comes AFTER \"t\" alphabetically.\n";
-            else std::cout << "\"s\" and \"t\" are exactly equal.\n";
+            std::cout << "Enter another string to compare with s: ";
+            std::string tmp;
+            std::getline(std::cin, tmp);
+
+            DynamicString u(tmp.c_str());
+
+            std::cout << "Comparing:\n";
+            std::cout << "   s = \"" << s << "\"\n";
+            std::cout << "   u = \"" << u << "\"\n\n";
+
+            if (s < u)
+                std::cout << "\"s\" comes BEFORE \"u\" alphabetically.\n";
+            else if (s > u)
+                std::cout << "\"s\" comes AFTER \"u\" alphabetically.\n";
+            else
+                std::cout << "\"s\" and \"u\" are EXACTLY equal.\n";
+
             break;
-        }
+            }
+
 
         case 7: {
             std::cout << "Enter text to append: ";
