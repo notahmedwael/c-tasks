@@ -8,6 +8,81 @@
 
 namespace fs = std::filesystem;
 
+// ------------------------ C-string helper utilities ------------------------
+
+char* App::allocLineFromStdString(const std::string& s) {
+    size_t len = s.size();
+    char* p = new char[len + 1];
+    memcpy(p, s.c_str(), len);
+    p[len] = '\0';
+    return p;
+}
+
+void App::replaceLine(int idx, const std::string& s) {
+    if (idx < 0 || idx >= (int)buffer.size()) return;
+    delete[] buffer[idx];
+    buffer[idx] = allocLineFromStdString(s);
+}
+
+void App::insertLine(int idx, const std::string& s) {
+    char* p = allocLineFromStdString(s);
+    if (idx < 0 || idx > (int)buffer.size()) buffer.push_back(p);
+    else buffer.insert(buffer.begin() + idx, p);
+}
+
+void App::deleteLine(int idx) {
+    if (idx < 0 || idx >= (int)buffer.size()) return;
+    delete[] buffer[idx];
+    buffer.erase(buffer.begin() + idx);
+}
+
+void App::insertCharInLine(int y, int x, char c) {
+    if (y < 0) return;
+    if (y >= (int)buffer.size()) {
+        // create lines up to y
+        while (y >= (int)buffer.size()) buffer.push_back(allocLineFromStdString(""));
+    }
+    std::string s(buffer[y]);
+    if (x < 0) x = 0;
+    if (x > (int)s.size()) x = (int)s.size();
+    s.insert((size_t)x, 1, c);
+    replaceLine(y, s);
+}
+
+void App::eraseCharInLine(int y, int x) {
+    if (y < 0 || y >= (int)buffer.size()) return;
+    std::string s(buffer[y]);
+    if (x < 0 || x >= (int)s.size()) return;
+    s.erase((size_t)x, 1);
+    replaceLine(y, s);
+}
+
+// simple wrap: split line at wrap_col, move suffix to new line below
+void App::wrapLineIfNeeded(int y, int /*cursorColBasedOnDisplay*/) {
+    int rows, cols; getmaxyx(stdscr, rows, cols);
+    int wrap_col = cols - 4; // keep margin, since we print at column 2
+    if (wrap_col < 10) wrap_col = 10; // sanity
+
+    if (y < 0 || y >= (int)buffer.size()) return;
+    int len = (int)strlen(buffer[y]);
+    if (len <= wrap_col) return;
+
+    std::string s(buffer[y]);
+    std::string suffix = s.substr(wrap_col);
+    s.erase(wrap_col);
+
+    replaceLine(y, s);
+    insertLine(y + 1, suffix);
+
+    // if cursor was beyond wrap_col, move it to beginning of new line
+    if (cursor_y == y && cursor_x > wrap_col) {
+        cursor_y = y + 1;
+        cursor_x = cursor_x - wrap_col;
+    }
+}
+
+// ------------------------ main class implementation ------------------------
+
 App::App() : state(MAIN_SCREEN), selected(0) {
     initscr();
     cbreak();
@@ -15,9 +90,7 @@ App::App() : state(MAIN_SCREEN), selected(0) {
     keypad(stdscr, TRUE);
     curs_set(1);
 
-    // make ESC register quickly and make getch non-blocking for escape sequences
 #ifdef NCURSES_VERSION
-    // set_escdelay is provided by ncurses; guard with a macro in case it's not present
     set_escdelay(0);
 #endif
     notimeout(stdscr, TRUE);
@@ -32,11 +105,15 @@ App::App() : state(MAIN_SCREEN), selected(0) {
     }
 
     createFilesDir();
-    buffer = {""};
+    // initial buffer: single empty line
+    buffer.clear();
+    buffer.push_back(allocLineFromStdString(""));
     ensureBufferInvariant();
 }
 
 App::~App() {
+    // free lines
+    for (auto p : buffer) delete[] p;
     endwin();
 }
 
@@ -57,21 +134,23 @@ void App::loadFilesFromDir() {
 
 int App::totalCharsInBuffer() const {
     int tot = 0;
-    for (const auto& s : buffer) tot += (int)s.size();
-    // count newlines as well if you want: tot += (int)buffer.size() - 1;
+    for (const auto& s : buffer) tot += (int)strlen(s);
     return tot;
 }
 
 void App::ensureBufferInvariant() {
-    if (buffer.empty()) buffer.push_back("");
+    if (buffer.empty()) buffer.push_back(allocLineFromStdString(""));
     if (cursor_y < 0) cursor_y = 0;
     if (cursor_y >= (int)buffer.size()) cursor_y = (int)buffer.size() - 1;
     if (cursor_x < 0) cursor_x = 0;
-    if (cursor_x > (int)buffer[cursor_y].size()) cursor_x = (int)buffer[cursor_y].size();
+    int curLineLen = (buffer[cursor_y]) ? (int)strlen(buffer[cursor_y]) : 0;
+    if (cursor_x > curLineLen) cursor_x = curLineLen;
     if (offset_y < 0) offset_y = 0;
+    // do not touch append_lock_* here
 }
 
-// main loop
+// ------------------------ run loop & draw ------------------------
+
 void App::run() {
     while (true) {
         erase();
@@ -117,7 +196,7 @@ void App::drawMainScreen() {
         mvprintw(y, (cols - (int)items[i].size()) / 2, "%s", items[i].c_str());
         if (i == selected) attroff(COLOR_PAIR(1) | A_BOLD);
     }
-    mvprintw(rows - 3, 2, "Use ↑↓ to navigate, Enter to select");
+    mvprintw(rows - 3, 2, "Use UP/DOWN KEYS to navigate, Enter to select");
 }
 
 void App::drawNewChoiceScreen() {
@@ -131,7 +210,7 @@ void App::drawNewChoiceScreen() {
         mvprintw(y, (cols - (int)items[i].size())/2, "%s", items[i].c_str());
         if (i == selected) attroff(COLOR_PAIR(1));
     }
-    mvprintw(LINES - 3, 2, "↑/↓ navigate, Enter confirm, ESC back");
+    mvprintw(LINES - 3, 2, "Use UP/DOWN KEYS to navigate, Enter confirm, ESC back");
 }
 
 void App::drawFileListScreen() {
@@ -142,10 +221,8 @@ void App::drawFileListScreen() {
     if (file_list.empty()) {
         mvprintw(6, (cols - 20)/2, "(No files yet)");
     } else {
-        // simple listing with highlight on selected
         int max_display = rows - 10;
         int start = 0;
-        // optional: ensure selected is visible
         if (selected < start) start = selected;
         if (selected >= start + max_display) start = selected - max_display + 1;
 
@@ -156,7 +233,7 @@ void App::drawFileListScreen() {
             if (i == selected) attroff(A_REVERSE);
         }
     }
-    mvprintw(rows - 3, 2, "↑↓ Navigate | Enter: select | N: new | ESC: back");
+    mvprintw(rows - 3, 2, "Use UP/DOWN KEYS to Navigate | Enter: select | N: new | ESC: back");
 }
 
 void App::drawFileModeScreen() {
@@ -169,7 +246,7 @@ void App::drawFileModeScreen() {
         mvprintw(10 + i, (cols - 10)/2, "%s", opts[i].c_str());
         if (i == (append_mode ? 0 : 1)) attroff(COLOR_PAIR(1) | A_BOLD);
     }
-    mvprintw(rows - 3, 2, "↑/↓ Toggle | Enter to continue | ESC: cancel");
+    mvprintw(rows - 3, 2, "Use UP/DOWN KEYS to Toggle | Enter to continue | ESC: cancel");
 }
 
 void App::drawEditorScreen() {
@@ -183,7 +260,7 @@ void App::drawEditorScreen() {
     if (cursor_y >= offset_y + display_lines) offset_y = cursor_y - display_lines + 1;
 
     for (int i = 0; i < display_lines && i + offset_y < (int)buffer.size(); ++i) {
-        mvprintw(3 + i, 2, "%s", buffer[i + offset_y].c_str());
+        mvprintw(3 + i, 2, "%s", buffer[i + offset_y]);
         clrtoeol();
     }
 
@@ -203,7 +280,7 @@ void App::drawDisplayChoiceScreen() {
         mvprintw(8 + i, (cols - (int)items[i].size())/2, "%s", items[i].c_str());
         if (i == selected) attroff(COLOR_PAIR(1));
     }
-    mvprintw(LINES - 3, 2, "↑/↓ navigate, Enter select, ESC back");
+    mvprintw(LINES - 3, 2, "Use UP/DOWN KEYS to  navigate, Enter select, ESC back");
 }
 
 void App::drawDisplayBufferScreen() {
@@ -212,7 +289,7 @@ void App::drawDisplayBufferScreen() {
     int display_lines = rows - 5;
     if (offset_y < 0) offset_y = 0;
     for (int i = 0; i < display_lines && i + offset_y < (int)buffer.size(); ++i) {
-        mvprintw(3 + i, 2, "%s", buffer[i + offset_y].c_str());
+        mvprintw(3 + i, 2, "%s", buffer[i + offset_y]);
     }
     mvprintw(rows - 3, 2, "Up/Down to scroll, ESC to return");
 }
@@ -246,7 +323,7 @@ void App::handleMainInput(int ch) {
     else if (ch == 10 || ch == 13) {
         if (selected == 0) { state = NEW_CHOICE_SCREEN; selected = 0; }
         else if (selected == 1) { state = DISPLAY_CHOICE_SCREEN; selected = 0; }
-        else { showMessage("Thanks For Using The Program"); endwin(); exit(0); }
+        else { clear(); showMessage("Thanks For Using The Program"); endwin(); exit(0); }
     }
     else if (ch == 27) {
         // ESC on main does nothing
@@ -256,7 +333,10 @@ void App::handleMainInput(int ch) {
 void App::handleNewChoiceInput(int ch) {
     if (ch == KEY_UP || ch == KEY_DOWN) selected = 1 - selected;
     else if (ch == 10 || ch == 13) {
-        buffer = {""};
+        // reset buffer to single empty line
+        for (auto p : buffer) delete[] p;
+        buffer.clear();
+        buffer.push_back(allocLineFromStdString(""));
         cursor_x = cursor_y = offset_y = 0;
         ensureBufferInvariant();
         if (selected == 0) {
@@ -305,6 +385,7 @@ void App::handleFileListInput(int ch) {
             current_file = "Files/" + std::string(name);
             if (current_file.size() < 4 || current_file.substr(current_file.size() - 4) != ".txt") current_file += ".txt";
             append_mode = false;
+            append_lock_x = append_lock_y = -1;
             state = FILE_MODE_SCREEN;
             return;
         }
@@ -333,6 +414,7 @@ void App::handleFileListInput(int ch) {
             current_file += ".txt";
         }
         append_mode = false;  // new file → overwrite mode
+        append_lock_x = append_lock_y = -1;
         state = FILE_MODE_SCREEN;
     }
     else if (ch == 10 || ch == 13) {  // Enter
@@ -371,39 +453,40 @@ void App::handleFileModeInput(int ch) {
         int tmp = atoi(input);
         max_chars = (tmp >= 10) ? tmp : 1000;
 
-        if (!append_mode && fs::exists(current_file)) {
-            // overwrite → start fresh buffer
-            buffer = {""};
+        for (auto p : buffer) delete[] p;
+        buffer.clear();
+        original_file_lines.clear();
 
-            // reset append lock
-            append_lock_x = append_lock_y = 0;
-        } else if (append_mode && fs::exists(current_file)) {
+        if (append_mode && fs::exists(current_file)) {
+            // Load file into buffer and original_file_lines
             std::ifstream f(current_file);
-            buffer.clear();
             std::string line;
-            while (std::getline(f, line)) buffer.push_back(line);
-            if (buffer.empty()) buffer.push_back("");
-
-            // Lock position: end of existing file content
+            while (std::getline(f, line)) {
+                buffer.push_back(allocLineFromStdString(line));
+                original_file_lines.push_back(line);
+            }
+            if (buffer.empty()) buffer.push_back(allocLineFromStdString(""));
+            
+            // Lock cursor at end
             append_lock_y = (int)buffer.size() - 1;
-            append_lock_x = (int)buffer.back().size();
-
+            append_lock_x = (int)strlen(buffer.back());
             cursor_y = append_lock_y;
             cursor_x = append_lock_x;
         } else {
-            // file doesn't exist yet (new) -> no original content
-            buffer = {""};
-            append_lock_x = append_lock_y = 0;
+            // Overwrite or new file
+            buffer.push_back(allocLineFromStdString(""));
+            append_lock_x = append_lock_y = -1;
         }
+
         ensureBufferInvariant();
         state = EDITOR_SCREEN;
     }
     if (ch == 27) { state = FILE_LIST_SCREEN; }
 }
 
+
 void App::handleEditorInput(int ch) {
     ensureBufferInvariant();
-    std::string &line = buffer[cursor_y];
 
     // ESC -> save (if file) and exit to main
     if (ch == 27) {
@@ -418,27 +501,22 @@ void App::handleEditorInput(int ch) {
         return;
     }
 
-    // helper: are we in append mode and before the locked region?
-    auto is_before_lock = [&]() -> bool {
-        if (!append_mode) return false;
-        // if there's no original content, lock is at 0,0 and before is false
-        // consider 'before' true if cursor is strictly before the append insertion point
-        if (append_lock_y < 0) return false;
-        if (cursor_y < append_lock_y) return true;
-        if (cursor_y == append_lock_y && cursor_x < append_lock_x) return true;
-        return false;
-    };
+    int rows, cols; getmaxyx(stdscr, rows, cols);
+    int display_lines = rows - 5;
+    int wrap_col = cols - 4;
+    if (wrap_col < 10) wrap_col = 10;
 
-    // Movement keys are allowed even if before lock, but modifications are not.
+    // Movement keys
     if (ch == KEY_LEFT) {
         if (cursor_x > 0) cursor_x--;
         else if (cursor_y > 0) {
             cursor_y--;
-            cursor_x = (int)buffer[cursor_y].size();
+            cursor_x = (int)strlen(buffer[cursor_y]);
         }
     }
     else if (ch == KEY_RIGHT) {
-        if (cursor_x < (int)line.size()) cursor_x++;
+        int linelen = (int)strlen(buffer[cursor_y]);
+        if (cursor_x < linelen) cursor_x++;
         else if (cursor_y < (int)buffer.size() - 1) {
             cursor_y++;
             cursor_x = 0;
@@ -447,79 +525,73 @@ void App::handleEditorInput(int ch) {
     else if (ch == KEY_UP) {
         if (cursor_y > 0) {
             cursor_y--;
-            cursor_x = std::min(cursor_x, (int)buffer[cursor_y].size());
+            cursor_x = std::min(cursor_x, (int)strlen(buffer[cursor_y]));
         }
     }
     else if (ch == KEY_DOWN) {
         if (cursor_y < (int)buffer.size() - 1) {
             cursor_y++;
-            cursor_x = std::min(cursor_x, (int)buffer[cursor_y].size());
+            cursor_x = std::min(cursor_x, (int)strlen(buffer[cursor_y]));
         }
     }
-    // BACKSPACE / DELETE / TYPING / ENTER: disallow modifications before lock in append mode
+    // BACKSPACE
     else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
-        if (is_before_lock()) {
-            beep();
-            return;
-        }
         if (cursor_x > 0) {
-            line.erase(cursor_x - 1, 1);
+            eraseCharInLine(cursor_y, cursor_x - 1);
             cursor_x--;
         } else if (cursor_y > 0) {
-            // join with previous line
-            int prev_len = (int)buffer[cursor_y - 1].size();
-            buffer[cursor_y - 1] += line;
-            buffer.erase(buffer.begin() + cursor_y);
+            int prev_len = (int)strlen(buffer[cursor_y - 1]);
+            // append current line to previous
+            std::string merged = std::string(buffer[cursor_y - 1]) + std::string(buffer[cursor_y]);
+            replaceLine(cursor_y - 1, merged);
+            deleteLine(cursor_y);
             cursor_y--;
             cursor_x = prev_len;
         }
     }
-    else if (ch == KEY_DC) { // delete key
-        if (is_before_lock()) {
-            beep();
-            return;
-        }
-        if (cursor_x < (int)line.size()) {
-            line.erase(cursor_x, 1);
+    // DELETE
+    else if (ch == KEY_DC) {
+        int linelen = (int)strlen(buffer[cursor_y]);
+        if (cursor_x < linelen) {
+            eraseCharInLine(cursor_y, cursor_x);
         } else if (cursor_y < (int)buffer.size() - 1) {
-            // join with next line
-            line += buffer[cursor_y + 1];
-            buffer.erase(buffer.begin() + cursor_y + 1);
+            std::string merged = std::string(buffer[cursor_y]) + std::string(buffer[cursor_y + 1]);
+            replaceLine(cursor_y, merged);
+            deleteLine(cursor_y + 1);
         }
     }
-    else if (ch == 10 || ch == 13) { // enter -> newline
-        if (is_before_lock()) {
-            // If cursor is exactly at the append insertion point, allow newline (it still appends)
-            if (!(cursor_y == append_lock_y && cursor_x == append_lock_x)) {
-                beep();
-                return;
-            }
-        }
-        std::string rest = line.substr(cursor_x);
-        line.erase(cursor_x);
-        buffer.insert(buffer.begin() + cursor_y + 1, rest);
+    // ENTER / newline
+    else if (ch == 10 || ch == 13) {
+        std::string cur(buffer[cursor_y]);
+        std::string rest = (cursor_x < (int)cur.size()) ? cur.substr(cursor_x) : std::string();
+        if (cursor_x < (int)cur.size()) cur.erase(cursor_x);
+        replaceLine(cursor_y, cur);
+        insertLine(cursor_y + 1, rest);
         cursor_y++;
         cursor_x = 0;
     }
+    // printable char insertion
     else if (ch >= 32 && ch <= 126) {
-        if (is_before_lock()) {
-            // disallow typing in read-only region
-            beep();
-            return;
-        }
-        // limit by max_chars (total)
         if (totalCharsInBuffer() < max_chars) {
-            line.insert(cursor_x, 1, (char)ch);
+            insertCharInLine(cursor_y, cursor_x, (char)ch);
             cursor_x++;
-        } else {
-            // optionally flash or message
-            beep();
-        }
+            // wrap if needed
+            if ((int)strlen(buffer[cursor_y]) > wrap_col) {
+                // split at wrap_col
+                std::string cur(buffer[cursor_y]);
+                std::string suffix = cur.substr(wrap_col);
+                cur.erase(wrap_col);
+                replaceLine(cursor_y, cur);
+                insertLine(cursor_y + 1, suffix);
+                if (cursor_x > wrap_col) {
+                    cursor_y = cursor_y + 1;
+                    cursor_x = cursor_x - wrap_col;
+                }
+            }
+        } else beep();
     }
 
     // Scrolling logic
-    int rows, cols; getmaxyx(stdscr, rows, cols);
-    int display_lines = rows - 5;
     if (cursor_y < offset_y) offset_y = cursor_y;
     if (cursor_y >= offset_y + display_lines) offset_y = cursor_y - display_lines + 1;
 
@@ -537,13 +609,10 @@ void App::handleDisplayBufferInput(int ch) {
         selected = 0;
         offset_y = 0;
     }
-    // clamp a bit to prevent overly large offset (optional)
     if (offset_y > (int)buffer.size()) offset_y = (int)buffer.size();
 }
 
 void App::handleDisplayFileInput(int ch) {
-    int rows, cols; getmaxyx(stdscr, rows, cols);
-    // we don't have the lines vector here; clamp by a big number
     if (ch == KEY_UP) offset_y = std::max(0, offset_y - 1);
     else if (ch == KEY_DOWN) offset_y = offset_y + 1;
     else if (ch == 27) {
@@ -554,7 +623,6 @@ void App::handleDisplayFileInput(int ch) {
     if (offset_y < 0) offset_y = 0;
 }
 
-// Display choice input (View Buffer / View File)
 void App::handleDisplayChoiceInput(int ch) {
     if (ch == KEY_UP || ch == KEY_DOWN) selected = 1 - selected;
     if (ch == 10 || ch == 13) {
@@ -562,7 +630,6 @@ void App::handleDisplayChoiceInput(int ch) {
         if (selected == 0) {
             state = DISPLAY_BUFFER_SCREEN;
         } else {
-            // go to file list but in viewing mode
             loadFilesFromDir();
             selecting_for_display = true;
             selected = 0;
@@ -575,46 +642,54 @@ void App::handleDisplayChoiceInput(int ch) {
 // ============= UTILITIES =============
 
 void App::saveBufferToFile() {
-    if (current_file.empty()) return; // don't save buffer-only sessions to disk
+    if (current_file.empty()) return;
 
-    // If append_mode: append only the new content (lines after append_lock_y / position)
     if (append_mode) {
         std::ofstream f(current_file, std::ios::app);
         if (!f.is_open()) {
             showMessage("Failed to open file for writing!");
             return;
         }
-        // If original file had N lines, append from N (append_lock_y+1) onward,
-        // but also if user added content to the last line (same index), we must handle that.
-        int start_idx = append_lock_y + 1; // lines after original last line
-        // Special case: if user edited/added to the original last line (cursor started at end but typed),
-        // we must append the remainder of that last line (characters after append_lock_x).
-        // We'll treat the original last line's new suffix as new content if any.
-        if (append_lock_y >= 0 && append_lock_y < (int)buffer.size()) {
-            const std::string& orig_last_candidate = buffer[append_lock_y];
-            if ((int)orig_last_candidate.size() > append_lock_x) {
-                // write the suffix of the original last line as a new line content (append a line)
-                // To preserve semantics, we append the entire modified last line as a new line
-                // (since original file already contains the old last line).
-                f << orig_last_candidate.substr(append_lock_x) << '\n';
+
+        int original_size = (int)original_file_lines.size();
+
+        for (int i = append_lock_y; i < (int)buffer.size(); ++i) {
+            std::string line(buffer[i]);
+            if (i < original_size) {
+                // Only append new chars after original content
+                int start_pos = (i == append_lock_y) ? append_lock_x : 0;
+                if (start_pos < (int)line.size()) {
+                    f << line.substr(start_pos) << '\n';
+                }
+            } else {
+                // Entire new line
+                f << line << '\n';
             }
         }
-        for (int i = start_idx; i < (int)buffer.size(); ++i) {
-            f << buffer[i] << '\n';
-        }
+
+        // Update original_file_lines for next append session
+        original_file_lines.clear();
+        std::ifstream fin(current_file);
+        std::string l;
+        while (std::getline(fin, l)) original_file_lines.push_back(l);
+
+        // Move append lock to new end
+        append_lock_y = (int)buffer.size() - 1;
+        append_lock_x = (int)strlen(buffer.back());
+
         return;
     }
 
-    // overwrite mode: write whole buffer
+    // Overwrite mode
     std::ofstream f(current_file, std::ios::trunc);
     if (!f.is_open()) {
         showMessage("Failed to open file for writing!");
         return;
     }
-    for (const auto& line : buffer) {
-        f << line << '\n';
-    }
+    for (const auto& line : buffer) f << line << '\n';
 }
+
+
 
 std::string App::getFileContent(const std::string& path) {
     std::ifstream f(path);

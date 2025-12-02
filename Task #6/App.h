@@ -26,8 +26,12 @@ private:
     ScreenState state;
     int selected;
 
-    // Editor data
-    std::vector<std::string> buffer;
+    // in App.h
+    std::vector<std::string> original_file_lines; // stores file content at load
+
+
+    // Editor data - now C-style lines
+    std::vector<char*> buffer;      // each element is a null-terminated char* line (heap allocated)
     int cursor_x = 0, cursor_y = 0;
     int offset_y = 0; // for editor scrolling
     int max_chars = 1000;
@@ -42,7 +46,7 @@ private:
 
     // Append-lock (prevents editing original content in append mode)
     int append_lock_x = 0;
-    int append_lock_y = 0;
+    int append_lock_y = -1; // -1 means no original content
 
     // Screens
     void drawMainScreen();
@@ -74,6 +78,15 @@ private:
 
     int totalCharsInBuffer() const;
     void ensureBufferInvariant();
+
+    // C-string helpers
+    char* allocLineFromStdString(const std::string& s);
+    void replaceLine(int idx, const std::string& s); // frees old, stores new
+    void insertLine(int idx, const std::string& s);  // alloc and insert
+    void deleteLine(int idx);                        // free and remove
+    void insertCharInLine(int y, int x, char c);
+    void eraseCharInLine(int y, int x);              // erase char at x
+    void wrapLineIfNeeded(int y, int cursorColBasedOnDisplay);
 };
 
 #endif
