@@ -1,0 +1,1 @@
+g++ main.cpp Shapes/*.cpp Scene/*.cpp -o scene -lsfml-graphics -lsfml-window -lsfml-system
